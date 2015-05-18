@@ -1,5 +1,15 @@
 import re
 import numpy as np
+import scipy.sparse
+from pymongo import MongoClient
+from collections import defaultdict
+from sklearn.feature_extraction.text import TfidfVectorizer
+import pickle
+# data preprocessing modules
+from nltk import PorterStemmer
+from nltk.corpus import stopwords
+from sklearn.preprocessing import label_binarize
+from sklearn.metrics import roc_curve, auc
 
 
 def find_math_words(text):
@@ -103,14 +113,138 @@ def strip_text(text):
     return list_voc
 
 
-def make_y_vec(data, topic_list):
-    ''' Useful in multiclass regression. '''
-    y_vec = np.zeros(shape=(1, len(topic_list)))
+def get_all_MER_topics():
+    '''Returns list of all topics on MER'''
+    client = MongoClient()
+    questions_collection = client['merdb'].questions
+    return questions_collection.find().distinct("topics")
 
-    if 'topics' in data:
-        topics = data['topics']
-        for topic in topics:
-            topic = str(topic)
-            y_vec[0][topic_list.index(topic)] = 1
 
-    return y_vec
+def get_questions_with_topics(topics):
+    '''Returns list of questions with matching topics'''
+    client = MongoClient()
+    questions_collection = client['merdb'].questions
+    if isinstance(topics, str):
+        topics = [topics]
+    qs = []
+    for q in questions_collection.find({"topics": {"$in": topics}}):
+        qs.append(q)
+    return qs
+
+
+def count_topics_in_questions(qs):
+    count_dict = defaultdict(int)
+    for q in qs:
+        try:
+            for topic in q['topics']:
+                count_dict[topic] += 1
+        except KeyError:
+            pass
+    return count_dict
+
+
+def question_to_BOW(q, include_hint_and_sols=True):
+    '''Transforms a question dictionary q to its bag of words'''
+    def words_stemmed_no_stop(words):
+        '''remove commonly used words and combine words with the same root'''
+        stop = stopwords.words('english')
+        res = []
+        for word in words:
+            stemmed = PorterStemmer().stem_word(word)
+            # take words longer than 1 char
+            if stemmed not in stop and len(stemmed) > 1:
+                res.append(stemmed)
+        return res
+
+    all_text = q['statement_html']
+    if include_hint_and_sols:
+        for h in q['hints_html']:
+            all_text += h
+        for s in q['sols_html']:
+            all_text += s
+
+    all_words = strip_text(all_text)
+    bow = words_stemmed_no_stop(all_words)
+    return ' '.join([w for w in bow])
+
+
+def questions_to_BOW(qs):
+    '''Transforms list of questions to list of bag of words'''
+    return [question_to_BOW(q) for q in qs]
+
+
+def question_to_X(q, FILE_TO_LOAD="TfidfVectorizer.bin"):
+    '''Transforms question to X vector. Uses vectorizer saved as 'vectorizer'
+    or at FILE_TO_LOAD'''
+    try:
+        return vectorizer.transform([question_to_BOW(q)])
+    except NameError:
+        vectorizer = pickle.load(open(FILE_TO_LOAD, "r"))
+        return vectorizer.transform([question_to_BOW(q)])
+
+
+def questions_to_X(qs):
+    '''Transforms questions to X matrix. Uses vectorizer saved as 'vectorizer'
+    or at FILE_TO_LOAD'''
+    qs_X = [question_to_X(q) for q in qs]
+    return scipy.sparse.vstack(qs_X)
+
+
+def save_TfidfVectorizer(qs, WHERE_TO_SAVE='TfidfVectorizer.bin'):
+    '''fits and saves TfidfVectorizer on input list of questions
+    (training set!)'''
+    vectorizer = TfidfVectorizer(min_df=2)
+    vectorizer.fit(questions_to_BOW(qs))
+    if WHERE_TO_SAVE:
+        pickle.dump(vectorizer, open(WHERE_TO_SAVE, "wb"))
+    return vectorizer
+
+
+def questions_to_y(qs, topic_tags):
+    def questions_to_topic_index(qs):
+        class_indices = range(0, len(topic_tags))
+        topic_labels = []
+        for q in qs:
+            # go through topic_tags, if any of the topics is in the question's
+            # topic list. Append its index to topic_labels
+            for i in class_indices:
+                if topic_tags[i] in q['topics']:
+                    topic_labels.append(i)
+                    # assumes there is only one topic for each question
+                    break
+
+        return np.asarray(topic_labels)
+
+    class_indices = range(0, len(topic_tags))
+    return label_binarize(questions_to_topic_index(qs), class_indices)
+
+
+def pred_to_topic(pred_array, topic_tags):
+    '''returns topic with largest likelihood from vector of prediction
+    probabilities for a single question'''
+    return(topic_tags[np.argmax(pred_array)])
+
+
+def preds_to_topics(preds_array, topic_tags):
+    '''returns topic with largest likelihood from vector of prediction
+    probabilities for an array of questions'''
+    result = []
+    for p in preds_array:
+        result.append(pred_to_topic(p, topic_tags))
+    return result
+
+
+def combined_roc_score(correct, predicted):
+    '''returns micro roc for combined classifier
+    and dict with roc for all classes'''
+    fpr = dict()
+    tpr = dict()
+    roc_auc = dict()
+    for i in range(predicted.shape[1]):
+        fpr[i], tpr[i], _ = roc_curve(correct[:, i], predicted[:, i])
+        roc_auc[i] = auc(fpr[i], tpr[i])
+    # Compute micro-average ROC curve and ROC area
+    fpr["micro"], tpr["micro"], _ = roc_curve(
+        correct.ravel(), predicted.ravel())
+    roc_auc["micro"] = auc(fpr["micro"], tpr["micro"])
+    return roc_auc["micro"], roc_auc
