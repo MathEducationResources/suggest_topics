@@ -1,0 +1,51 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html>
+<title>Test page for topic classification / finding similar questions</title>
+<head>
+<script type="text/javascript" src="https://ajax.googleapis.com/ajax/libs/jquery/1.7.2/jquery.min.js"></script>
+<script type="text/javascript">
+
+JSONTest = function() {
+
+    data = {statement: $('#statementContainer').text()};
+
+    $.ajax({
+        url: "/result",
+        type: "POST",
+        data: JSON.stringify(data, null, '\t'),
+        contentType: "application/json; charset=utf-8",
+        dataType: "json",
+        success: function (result) {
+            console.log(result);
+            $("#resultDivContainer").text("Computed length: " + result.length);
+        },
+        error: function (xhr, ajaxOptions, thrownError) {
+            console.log('failed');
+        }
+    });
+};
+
+</script>
+</head>
+<body>
+
+<h1>Test page for topic classification / finding similar questions</h1>
+
+<select id="dropdown">
+    {% for id in questionIDs %}
+        <option value="{{ id.statement }}">{{ id.id }}</option>
+    {% endfor %}
+</select>
+<div id="statementContainer"></div>
+
+<button type="button" onclick="JSONTest()">Compute!</button>
+<div id="resultDivContainer"></div>
+
+</body>
+<script type="text/javascript">
+$('#dropdown').change(function(){
+    var new_statement = $(this).find('option:selected').attr('value');
+    $('#statementContainer').text(new_statement);
+    });
+</script>
+</html>
