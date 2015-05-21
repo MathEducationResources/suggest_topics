@@ -17,7 +17,7 @@ JSONTest = function() {
         dataType: "json",
         success: function (result) {
             console.log(result);
-            $("#resultDivContainer").text("The topic is: " + result.ptopic);
+            $("#resultDivContainer").text("Computed length: " + result.length);
         },
         error: function (xhr, ajaxOptions, thrownError) {
             console.log('failed');
@@ -38,7 +38,7 @@ JSONTest = function() {
 </select>
 <div id="statementContainer"></div>
 
-<button type="button" onclick="JSONTest()">Predict!</button>
+<button type="button" onclick="JSONTest()">Compute!</button>
 <div id="resultDivContainer"></div>
 
 </body>

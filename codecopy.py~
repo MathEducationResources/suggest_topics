@@ -1,0 +1,246 @@
+import os
+import json
+import numpy as np
+import scipy.sparse
+import helpers
+from pymongo import MongoClient
+import matplotlib.pyplot as plt
+import pickle
+from collections import defaultdict
+
+# machine learning modules
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.multiclass import OneVsRestClassifier
+from sklearn.linear_model import LogisticRegression
+from sklearn import svm
+from sklearn.metrics import roc_curve, auc
+from sklearn.decomposition import PCA
+from mpl_toolkits.mplot3d import Axes3D
+
+# data preprocessing modules
+from nltk import PorterStemmer
+from nltk.corpus import stopwords
+from sklearn.preprocessing import label_binarize
+
+# create an array of all topics of interest
+topic_tags = ["Eigenvalues_and_eigenvectors",
+              "Probability_density_function",
+              "Taylor_series",
+              "Substitution"]
+
+#num_classes = len(topic_tags)
+
+def get_all_MER_topics():
+    '''Returns list of all topics on MER'''
+    client = MongoClient()
+    questions_collection = client['merdb'].questions
+    return questions_collection.find().distinct("topics")
+
+def get_questions_with_topics(topics):
+    '''Returns list of questions with matching topics'''
+    client = MongoClient()
+    questions_collection = client['merdb'].questions
+    if isinstance(topics, basestring):
+        topics = [topics]
+    qs = []
+    for q in questions_collection.find({"topics": {"$in": topics}}):
+        qs.append(q)
+    return qs
+
+def count_topics_in_questions(qs):
+    count_dict = defaultdict(int)
+    for q in qs:
+        try:
+            for topic in q['topics']:
+                count_dict[topic] += 1
+        except KeyError:
+            pass
+    return count_dict
+
+questions_raw = get_questions_with_topics(topic_tags)
+
+
+print('TOTAL:\n## - Topic\n==========')
+for topic, count in count_topics_in_questions(questions_raw).iteritems():
+    print('%2d - %s' %(count, topic.replace('_', ' ')))
+    
+    
+# for reproducibility we set the seed of the random number generator
+np.random.seed(23)
+
+
+def get_indices_of_matching_topics(qs):
+	#!!!
+	all_indices = [[] for i in range(len(topic_tags))]
+	for i, q in enumerate(qs):
+		for j, t in enumerate(topic_tags):
+			if t in q['topics']:
+				all_indices[j].append(i)
+	
+
+def train_test_split(qs, TRAIN_PROPORTION=0.75):
+    '''randomly splits list of questions into two lists for train and test'''
+    TEST_PROPORTION = 1-TRAIN_PROPORTION
+    NUM_SAMPLES = int(TEST_PROPORTION * len(qs))
+    #TEST_INDICES = np.random.choice(range(len(qs)), NUM_SAMPLES, replace=False)
+    #!!!
+    
+    train_indices = []
+    question_indices_by_topic = get_indices_of_matching_topics(qs)
+    indices_left = list(range(len(qs))
+    
+    # pick a question for each topic at random
+    for question_indices in enumerate(question_indices_by_topic):
+    	question_index_for_topic = np.random.choice(question_indices)
+    	if question_index_for_topic not in train_indices:
+    		train_indices.append(question_index_for_topic)
+    		indices_left.remove(question_index_for_topic)
+    
+    
+    
+    
+    #from the rest of the questions, pick 	
+    
+	
+    qs_train = [q for i, q in enumerate(qs) if not i in TEST_INDICES]
+    qs_test = [q for i, q in enumerate(qs) if i in TEST_INDICES]
+    return qs_train, qs_test
+
+    
+
+questions_train, questions_test = train_test_split(questions_raw)
+
+print('TRAIN/TEST:\n##/## - Topic\n=============')
+for t in topic_tags:
+    print('%2d/%2d - %s' % (sum([1 for q in questions_train if t in q['topics']]),
+                          sum([1 for q in questions_test if t in q['topics']]),
+                          t.replace('_', ' ')))    
+                          
+def question_to_BOW(q, include_hint_and_sols = True):
+    '''Transforms a question dictionary q to its bag of words'''
+    def words_stemmed_no_stop(words):
+        '''remove commonly used words and combine words with the same root'''
+        stop = stopwords.words('english')
+        res = []
+        for word in words:
+            stemmed = PorterStemmer().stem_word(word)
+            if stemmed not in stop and len(stemmed) > 1: #take words longer than 1 char
+                res.append(stemmed)
+        return res
+
+    all_text = q['statement_html']
+    if include_hint_and_sols:
+        for h in q['hints_html']:
+            all_text += h
+        for s in q['sols_html']:
+            all_text += s
+
+    all_words = helpers.strip_text(all_text)
+    bow = words_stemmed_no_stop(all_words)
+    return ' '.join([w for w in bow])
+
+def questions_to_BOW(qs):
+    '''Transforms list of questions to list of bag of words'''
+    return [question_to_BOW(q) for q in qs]
+
+
+def question_to_X(q, FILE_TO_LOAD="TfidfVectorizer.bin"):
+    try:
+        return vectorizer.transform([question_to_BOW(q)])
+    except NameError:
+        vectorizer = pickle.load(open(FILE_TO_LOAD, "r"))
+        return vectorizer.transform([question_to_BOW(q)])
+
+    
+def questions_to_X(qs):
+    qs_X = [question_to_X(q) for q in qs]
+    return scipy.sparse.vstack(qs_X)
+
+
+def save_TfidfVectorizer(qs, WHERE_TO_SAVE='TfidfVectorizer.bin'):
+    '''fits and saves TfidfVectorizer on input list of questions (training set!)'''
+    vectorizer = TfidfVectorizer(min_df = 2)
+    vectorizer.fit(questions_to_BOW(qs))
+    if WHERE_TO_SAVE:
+        pickle.dump(vectorizer, open(WHERE_TO_SAVE, "wb"))
+    return vectorizer
+
+
+vectorizer = save_TfidfVectorizer(questions_train)
+X_train = questions_to_X(questions_train)
+X_test = questions_to_X(questions_test)
+
+# transform questions into appropriate labels
+def questions_to_topic_index(qs):
+    class_indices = range(0, len(topic_tags))
+    topic_labels = []
+    for q in qs:
+        # go through topic_tags, if any of the topics is in the question's topic list
+        # append its index to topic_labels
+        for i in class_indices:
+            if topic_tags[i] in q['topics']:
+                topic_labels.append(i)
+                # assumes there is only one topic for each question
+                break 
+                
+    return np.asarray(topic_labels)
+
+def questions_to_y(qs):
+    class_indices = range(0, len(topic_tags))
+    return label_binarize(questions_to_topic_index(qs), class_indices)
+    
+y_train = questions_to_y(questions_train)
+y_test = questions_to_y(questions_test)
+
+# SVC for now
+classifier = OneVsRestClassifier(svm.SVC(kernel='linear',
+                                         probability = True,
+                                         random_state=np.random.RandomState(0))
+                                )
+trained_classifier = classifier.fit(X_train, y_train)
+pickle.dump(trained_classifier, open("svc.bin", "wb"))
+
+def pred_to_topic(pred_array):
+    return(topic_tags[np.argmax(pred_array)])
+
+def preds_to_topics(preds_array):
+    result = []
+    for p in preds_array:
+        result.append(pred_to_topic(p))
+    return result
+
+preds = trained_classifier.predict_proba(X_test)
+predicted_classes = preds_to_topics(preds)
+
+print(predicted_classes)
+
+def combined_roc_score(correct, predicted):
+    '''returns micro roc for combined classifier, and dict with roc for all classes'''
+    fpr = dict()
+    tpr = dict()
+    roc_auc = dict()
+    for i in range(len(topic_tags)):
+        fpr[i], tpr[i], _ = roc_curve(correct[:, i], predicted[:, i])
+        roc_auc[i] = auc(fpr[i], tpr[i])
+    # Compute micro-average ROC curve and ROC area
+    fpr["micro"], tpr["micro"], _ = roc_curve(correct.ravel(), predicted.ravel())
+    roc_auc["micro"] = auc(fpr["micro"], tpr["micro"])
+    return roc_auc["micro"], roc_auc
+
+print('%.5f combined micro AUC score.' %combined_roc_score(y_test, preds)[0])
+
+#### TODO
+pca = PCA(n_components=3)
+pca.fit(X_train.toarray())
+pca_X_train = pca.transform(X_train.toarray())
+pca_X_test = pca.transform(X_test.toarray())
+print('The first 3 principal components explain %.2f of the variance in the dataset.' % sum(pca.explained_variance_ratio_))
+
+def predict_topic_for_question(q, classifier, voc):
+    vec = question_to_vector(q, voc)
+    pred_prob = classifier.predict_proba(vec)
+    pred_class = pred_to_topic(pred_prob)
+    return pred_class
+    
+print(predict_topic_for_question(questions[77], trained_classifier, vocabulary_sorted))
+

@@ -48,7 +48,7 @@ def result():
     
     q = helpers.find_question(statement)
     pred = helpers.determine_topic_for_question(q, final_classifier, topic_tags)
-    return jsonify({"statement": statement, "ptopic": helpers.beautify(pred)})
+    return jsonify({"statement": statement, "length": helpers.beautify(pred)})
 
 if __name__ == '__main__':
     app.run(debug=True)

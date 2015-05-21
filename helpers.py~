@@ -279,9 +279,3 @@ def determine_topic_for_question(q, classifier, topic_tags):
         pass
     predicted = predict_topic_for_question(q, classifier, topic_tags)
     return predicted
-    
-def beautify(topic):
-    if topic == None:
-    	return topic
-    else:
-    	return topic.replace("_", " ")
