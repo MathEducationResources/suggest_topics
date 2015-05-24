@@ -5,7 +5,6 @@ from flask import jsonify
 from pymongo import MongoClient
 app = Flask(__name__)
 
-#more imports
 try:
     import cPickle as pickle
 except:
@@ -36,7 +35,8 @@ def result():
     topic_tags = ["Eigenvalues_and_eigenvectors",
               "Probability_density_function",
               "Taylor_series",
-              "Substitution", "Lagrange_interpolation"]
+              "Substitution",
+              "Lagrange_interpolation"]
     # Currently this simply reads the json, calculates the number of characters
     # (to prove that the data is received) and returns this information.
     # Here is where we would load the classifier, turn the content into a

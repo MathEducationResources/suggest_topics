@@ -8,6 +8,9 @@ try:
     import cPickle as pickle
 except:
     import pickle
+
+from collections import Counter
+
 # data preprocessing modules
 from nltk import PorterStemmer
 from nltk.corpus import stopwords
@@ -121,7 +124,7 @@ def get_all_MER_topics():
     client = MongoClient()
     questions_collection = client['merdb'].questions
     return questions_collection.find().distinct("topics")
-    
+
 
 def get_questions_with_topics(topics):
     '''Returns list of questions with matching topics'''
@@ -144,6 +147,55 @@ def count_topics_in_questions(qs):
         except KeyError:
             pass
     return count_dict
+
+
+def get_topic_to_parent_dict():
+    '''returns dict topic -> parent_topic'''
+    client = MongoClient()
+    topics_collection = client['merdb'].topics
+    topic_to_parent_dict = dict()
+    for q in topics_collection.find():
+        topic_to_parent_dict[q['topic']] = q['parent']
+    return topic_to_parent_dict
+
+
+def topic_to_parent(topic):
+    '''returns parent for given topic'''
+    try:
+        return topic_to_parent_dict[topic]
+    except NameError:
+        topic_to_parent_dict = get_topic_to_parent_dict()
+        return topic_to_parent_dict[topic]
+
+
+def question_to_parents(q):
+    '''returns sorted list of all unique parents of the questions,
+    or [None] if question has no topics or topic is unknown.'''
+    if not 'topics' in q.keys():
+        return [None]
+    parents = []
+    for topic in q['topics']:
+        parents.append(topic_to_parent(topic))
+    return sorted(list(set(parents)))
+
+
+def questions_to_parents(qs):
+    '''returns list of sorted list of all unique parents for all questions.'''
+    list_of_parents = []
+    for q in qs:
+        list_of_parents.append(question_to_parents(q))
+    return list_of_parents
+
+
+def unique_parents(qs):
+    '''
+    returns list of distinct parent topics in list of questions qs.
+    Removes parents with only a single question!
+    '''
+    c = Counter(p for q in qs for p in question_to_parents(q))
+    at_least_twice = [
+        p for q in qs for p in question_to_parents(q) if c[p] > 1]
+    return sorted(list(set(at_least_twice)))
 
 
 def question_to_BOW(q, include_hint_and_sols=True):
@@ -202,24 +254,33 @@ def save_TfidfVectorizer(qs, WHERE_TO_SAVE='TfidfVectorizer.bin'):
         pickle.dump(vectorizer, open(WHERE_TO_SAVE, "wb"))
     return vectorizer
 
-###!!! rewrote
-def questions_to_topic_index(qs, topic_tags):
-        class_indices = range(0, len(topic_tags))
-        topic_labels = []
-        for q in qs:
-            # go through topic_tags, if any of the topics is in the quuestion's
-            # topic list. Append its index to topic_labels
-            for i in class_indices:
-                if topic_tags[i] in q['topics']:
-                    topic_labels.append(i)
-                    # assumes there is only one topic for each question
-                    break
 
-        return np.asarray(topic_labels)
-
-def questions_to_y(qs, topic_tags):
+# !!! rewrote
+def questions_to_topic_index(qs, topic_tags, parents=False):
     class_indices = range(0, len(topic_tags))
-    return label_binarize(questions_to_topic_index(qs, topic_tags), class_indices)
+    topic_labels = []
+    for q in qs:
+            # go through topic_tags, if any of the topics is in the question's
+            # topic list. Append its index to topic_labels
+        for i in class_indices:
+            if (((not parents) and (topic_tags[i] in q['topics']))
+                    or
+                    ((parents) and topic_tags[i] in question_to_parents(q))):
+                topic_labels.append(i)
+                # assumes there is only one topic for each question
+                break
+
+    return np.asarray(topic_labels)
+
+
+def questions_to_y(qs, topic_tags, parents=False):
+    if parents:
+        class_indices = range(len(unique_parents(qs)))
+    else:
+        class_indices = range(len(topic_tags))
+
+    return label_binarize(questions_to_topic_index(qs, topic_tags, parents),
+                          class_indices)
 
 
 def pred_to_topic(pred_array, topic_tags):
@@ -251,7 +312,8 @@ def combined_roc_score(correct, predicted):
         correct.ravel(), predicted.ravel())
     roc_auc["micro"] = auc(fpr["micro"], tpr["micro"])
     return roc_auc["micro"], roc_auc
-    
+
+
 def find_question(statement):
     '''Returns a question that matches the statement'''
     client = MongoClient()
@@ -259,17 +321,24 @@ def find_question(statement):
     questions = db['questions']
     for q in questions.find({"statement_html": statement}):
         return q
-        
+
+
 def predict_topic_for_question(q, classifier, topic_tags):
     vec = question_to_X(q)
     pred_prob = classifier.predict_proba(vec)
     pred_class = pred_to_topic(pred_prob, topic_tags)
-    
+
     return pred_class
+    
+#!!!
+#sort by probabilities
+
+def predict_topics_for_questions(qs, classifier, topic_tags):
+    return [predict_topic_for_question(q, classifier, topic_tags) for q in qs]
 
 def determine_topic_for_question(q, classifier, topic_tags):
     # assumes only one topic
-    if q == None:
+    if q is None:
         return None
     try:
         for t in topic_tags:
@@ -279,9 +348,13 @@ def determine_topic_for_question(q, classifier, topic_tags):
         pass
     predicted = predict_topic_for_question(q, classifier, topic_tags)
     return predicted
-    
+
+
+def determine_topics_for_questions(qs, classifier, topic_tags):
+    return [determine_topic_for_question(q, classifier, topic_tags) for q in qs]
+
 def beautify(topic):
-    if topic == None:
-    	return topic
+    if topic is None:
+        return topic
     else:
-    	return topic.replace("_", " ")
+        return topic.replace("_", " ")

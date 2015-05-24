@@ -329,6 +329,9 @@ def predict_topic_for_question(q, classifier, topic_tags):
     pred_class = pred_to_topic(pred_prob, topic_tags)
 
     return pred_class
+    
+#!!!
+#sort by probabilities
 
 def predict_topics_for_questions(qs, classifier, topic_tags):
     return [predict_topic_for_question(q, classifier, topic_tags) for q in qs]

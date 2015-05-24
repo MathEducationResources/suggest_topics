@@ -330,6 +330,8 @@ def predict_topic_for_question(q, classifier, topic_tags):
 
     return pred_class
 
+def predict_topics_for_questions(qs, classifier, topic_tags):
+    return [predict_topic_for_question(q, classifier, topic_tags) for q in qs]
 
 def determine_topic_for_question(q, classifier, topic_tags):
     # assumes only one topic
@@ -344,6 +346,9 @@ def determine_topic_for_question(q, classifier, topic_tags):
     predicted = predict_topic_for_question(q, classifier, topic_tags)
     return predicted
 
+
+def determine_topics_for_questions(qs, classifier, topic_tags):
+    return [determine_topic_for_question(q, classifier, topic_tags) for q in qs]
 
 def beautify(topic):
     if topic is None:
